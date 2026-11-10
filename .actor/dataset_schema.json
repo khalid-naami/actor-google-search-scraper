@@ -1,0 +1,72 @@
+{
+    "actorSpecification": 1,
+    "fields": {
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "title": "SERP Result Type (ORGANIC, PAA, SNIPPET, RELATED)"
+            },
+            "searchQuery": {
+                "type": "string",
+                "title": "Search Keyword / Query"
+            },
+            "position": {
+                "type": "integer",
+                "title": "Organic Rank Position"
+            },
+            "title": {
+                "type": "string",
+                "title": "Page Title"
+            },
+            "url": {
+                "type": "string",
+                "title": "Destination URL"
+            },
+            "domain": {
+                "type": "string",
+                "title": "Domain Hostname"
+            },
+            "displayedUrl": {
+                "type": "string",
+                "title": "Displayed Breadcrumb URL"
+            },
+            "description": {
+                "type": "string",
+                "title": "Snippet Description"
+            },
+            "question": {
+                "type": "string",
+                "title": "People Also Ask Question"
+            },
+            "answer": {
+                "type": "string",
+                "title": "Answer / Snippet Text"
+            },
+            "sitelinks": {
+                "type": "array",
+                "title": "Sitelinks List"
+            },
+            "date": {
+                "type": "string",
+                "title": "Published Date in Snippet"
+            },
+            "countryCode": {
+                "type": "string",
+                "title": "Search Country (gl)"
+            },
+            "languageCode": {
+                "type": "string",
+                "title": "Search Language (hl)"
+            },
+            "pageNumber": {
+                "type": "integer",
+                "title": "SERP Page Number"
+            },
+            "scrapedAt": {
+                "type": "string",
+                "title": "Scraped At Timestamp"
+            }
+        }
+    }
+}
