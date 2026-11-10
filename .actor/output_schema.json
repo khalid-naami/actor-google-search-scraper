@@ -1,0 +1,18 @@
+{
+    "actorOutputSchemaVersion": 1,
+    "title": "Google Search Ultimate Scraper Output",
+    "properties": {
+        "results": {
+            "type": "string",
+            "title": "Dataset Records",
+            "description": "Scraped Google SERP records (Organic results, Featured snippets, PAA questions, Related searches)",
+            "template": "{{links.apiDefaultDatasetUrl}}/items"
+        },
+        "overview": {
+            "type": "string",
+            "title": "Executive Summary Payload",
+            "description": "High-level summary report and execution metrics stored in Key-Value store",
+            "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
+        }
+    }
+}
