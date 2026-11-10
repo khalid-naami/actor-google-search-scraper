@@ -1,0 +1,25 @@
+{
+    "actorSpecification": 1,
+    "name": "google-search-ultimate-scraper",
+    "title": "Google Search Ultimate Scraper (Organic SERP, PAA, Snippets & Ranking)",
+    "description": "Comprehensive all-in-one Google Search data extractor. Extracts Organic Search Results, Rank Positions, Featured Snippets, People Also Ask (PAA) Q&As, Knowledge Panels, and Related Searches across countries and languages.",
+    "version": "1.0.0",
+    "meta": {
+        "templateId": "js-crawlee-playwright"
+    },
+    "dockerfile": "./Dockerfile",
+    "input": "./input_schema.json",
+    "storages": {
+        "dataset": "./dataset_schema.json"
+    },
+    "output": "./output_schema.json",
+    "categories": [
+        "SEO_TOOLS",
+        "AI",
+        "MARKETING",
+        "RESEARCH"
+    ],
+    "environmentVariables": {
+        "APIFY_DISABLE_BROWSER_SANDBOX": "1"
+    }
+}
