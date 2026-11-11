@@ -53,13 +53,29 @@ try {
     });
 
     const proxyConfig = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
+    const resolvedSerpProxy = isGoogleSerpProxy
+        || (Array.isArray(proxyConfig?.groups) && proxyConfig.groups.some((g) => /GOOGLE_?SERP/i.test(String(g))));
+
     if (proxyConfig) {
-        log.info('Configured Apify Proxy successfully');
+        log.info('Configured Apify Proxy successfully', {
+            groups: proxyConfig.groups || [],
+            countryCode: proxyConfig.countryCode || null,
+            isManInTheMiddle: Boolean(proxyConfig.isManInTheMiddle),
+            isGoogleSerpProxy: resolvedSerpProxy,
+        });
+    }
+
+    function formatDiagnostics(diag) {
+        if (!diag) return '';
+        const parts = [`status=${diag.statusCode}`, `len=${diag.htmlLength}`];
+        if (diag.location) parts.push(`location=${diag.location}`);
+        if (diag.title) parts.push(`title="${diag.title.slice(0, 80)}"`);
+        return ` [${parts.join(', ')}]`;
     }
 
     async function fetchHtml(url) {
         const proxyUrl = proxyConfig ? await proxyConfig.newUrl() : undefined;
-        const proxyIsSerp = isGoogleSerpProxy || /GOOGLE_?SERP/i.test(proxyUrl || '');
+        const proxyIsSerp = resolvedSerpProxy || /GOOGLE_?SERP/i.test(proxyUrl || '');
         // Apify GOOGLE_SERP proxy strictly requires plain http://www.google.com/search?...
         const requestUrl = proxyIsSerp ? url.replace(/^https:\/\//i, 'http://') : url;
 
@@ -67,6 +83,8 @@ try {
             url: requestUrl,
             headers: {
                 'accept-language': acceptLanguage,
+                'accept-encoding': 'gzip, deflate, br',
+                'sec-fetch-site': 'none',
             },
             headerGeneratorOptions: {
                 browsers: [{ name: 'chrome' }],
@@ -81,10 +99,16 @@ try {
             throwHttpErrors: false,
         });
 
-        const blockCheck = detectGoogleBlock(response.body, response.url || requestUrl, response.statusCode);
+        const blockCheck = detectGoogleBlock(
+            response.body,
+            response.url || requestUrl,
+            response.statusCode,
+            response.headers,
+        );
         if (blockCheck.blocked) {
-            const err = new Error(blockCheck.message);
+            const err = new Error(`${blockCheck.message}${formatDiagnostics(blockCheck.diagnostics)}`);
             err.reason = blockCheck.reason;
+            err.diagnostics = blockCheck.diagnostics;
             err.isSerpProxy = proxyIsSerp;
             throw err;
         }
@@ -92,9 +116,24 @@ try {
         return response.body;
     }
 
+    async function safePageContent(page) {
+        for (let i = 0; i < 3; i++) {
+            try {
+                return await page.content();
+            } catch (err) {
+                if (i === 2) throw err;
+                await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+                await page.waitForTimeout(500);
+            }
+        }
+        return '';
+    }
+
     async function fetchWithPlaywright(url, attemptProxyUrl = undefined) {
+        // Inside Apify's xvfb-run container, DISPLAY is set so Chromium can run non-headless (avoiding HeadlessChrome UA)
+        const hasXvfbDisplay = process.platform === 'linux' && Boolean(process.env.DISPLAY);
         const launchOptions = {
-            headless: true,
+            headless: !hasXvfbDisplay,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -106,6 +145,8 @@ try {
                 '--disable-extensions',
                 '--no-first-run',
                 '--mute-audio',
+                '--ignore-certificate-errors',
+                '--ignore-certificate-errors-spki-list',
                 '--disable-blink-features=AutomationControlled',
             ],
         };
@@ -115,13 +156,24 @@ try {
 
         const browser = await chromium.launch(launchOptions);
         try {
+            const browserVersion = browser.version() || '147.0.0.0';
+            const cleanUserAgent = `Mozilla/5.0 (${process.platform === 'linux' ? 'X11; Linux x86_64' : 'Windows NT 10.0; Win64; x64'}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion} Safari/537.36`;
+
             const context = await browser.newContext({
+                ignoreHTTPSErrors: true,
+                userAgent: cleanUserAgent,
                 locale: playwrightLocale,
                 viewport: { width: 1366, height: 768 },
                 extraHTTPHeaders: {
                     'Accept-Language': acceptLanguage,
                 },
             });
+
+            await context.addInitScript((langList) => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'languages', { get: () => langList });
+            }, [playwrightLocale, cleanLanguage, 'en']);
+
             const page = await context.newPage();
 
             await page.route('**/*', (route) => {
@@ -132,7 +184,12 @@ try {
                 return route.continue();
             });
 
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 35000 });
+            const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 35000 });
+
+            // Wait briefly if Google SearchGuard /enablejs triggers a client-side JS redirect
+            if (page.url().includes('/enablejs')) {
+                await page.waitForURL((u) => !u.href.includes('/enablejs'), { timeout: 10000 }).catch(() => {});
+            }
 
             // Dismiss Google EU consent popup if present
             try {
@@ -143,19 +200,22 @@ try {
                 }
             } catch {}
 
-            await page.waitForSelector('div#rso h3, div#search h3, div.Gx5Zad, form#captcha-form', { timeout: 12000 }).catch(() => {});
-            await page.waitForTimeout(1200);
+            await page.waitForSelector('div#rso h3, div#search h3, div.Gx5Zad, form#captcha-form', { timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(1000);
 
-            const html = await page.content();
+            const html = await safePageContent(page);
             const finalUrl = page.url();
-            const blockCheck = detectGoogleBlock(html, finalUrl, 200);
+            const navStatus = navResponse ? navResponse.status() : 200;
+            const blockCheck = detectGoogleBlock(html, finalUrl, navStatus, {});
             if (blockCheck.blocked) {
+                const diagSuffix = formatDiagnostics(blockCheck.diagnostics);
                 const err = new Error(
                     blockCheck.reason === 'CAPTCHA'
-                        ? 'Google blocked this IP with a /sorry/ CAPTCHA. In Apify Console, set Proxy Configuration to Apify Proxy group "GOOGLE_SERP" or "RESIDENTIAL" (default Datacenter IPs are commonly challenged by Google Search).'
-                        : blockCheck.message
+                        ? `Google blocked this IP with a /sorry/ CAPTCHA${diagSuffix}. Try Apify Proxy group "RESIDENTIAL" or "UNBLOCKER" (or "GOOGLE_SERP").`
+                        : `${blockCheck.message}${diagSuffix}`
                 );
                 err.reason = blockCheck.reason;
+                err.diagnostics = blockCheck.diagnostics;
                 throw err;
             }
 
@@ -186,7 +246,11 @@ try {
         let hasMore = true;
 
         while (collectedForQuery < maxResults && hasMore) {
-            let searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&gl=${encodeURIComponent(cleanCountry)}&hl=${encodeURIComponent(cleanLanguage)}&num=${resultsPerPage}&start=${start}`;
+            let searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&gl=${encodeURIComponent(cleanCountry)}&hl=${encodeURIComponent(cleanLanguage)}`;
+            if (resultsPerPage > 10) {
+                searchUrl += `&num=${resultsPerPage}`;
+            }
+            searchUrl += `&start=${start}`;
             if (cleanTimeFilter && cleanTimeFilter !== 'all') {
                 searchUrl += `&tbs=${encodeURIComponent(cleanTimeFilter)}`;
             }
@@ -196,7 +260,7 @@ try {
             try {
                 let html = '';
 
-                if (isGoogleSerpProxy) {
+                if (resolvedSerpProxy) {
                     // GOOGLE_SERP proxy must execute directly over HTTP without Playwright subresources
                     let lastErr = null;
                     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -216,8 +280,22 @@ try {
                     } catch (httpErr) {
                         if (httpErr.isSerpProxy) throw httpErr;
                         log.warning(`⚠️ Fast HTTP blocked/challenged (${httpErr.message}). Trying Playwright browser fallback...`);
-                        const pwProxyUrl = proxyConfig ? await proxyConfig.newUrl() : undefined;
-                        html = await fetchWithPlaywright(searchUrl, pwProxyUrl);
+                        const maxPwAttempts = proxyConfig ? 2 : 1;
+                        let lastPwErr = null;
+                        for (let pwAttempt = 1; pwAttempt <= maxPwAttempts; pwAttempt++) {
+                            const pwProxyUrl = proxyConfig ? await proxyConfig.newUrl() : undefined;
+                            try {
+                                html = await fetchWithPlaywright(searchUrl, pwProxyUrl);
+                                break;
+                            } catch (pwErr) {
+                                lastPwErr = pwErr;
+                                if (pwAttempt < maxPwAttempts) {
+                                    log.warning(`⚠️ Playwright attempt ${pwAttempt}/${maxPwAttempts} failed (${pwErr.message}). Retrying with a fresh proxy IP...`);
+                                    await new Promise((r) => setTimeout(r, 1200));
+                                }
+                            }
+                        }
+                        if (!html && lastPwErr) throw lastPwErr;
                     }
                 }
 
@@ -288,7 +366,8 @@ try {
                     }
                 }
 
-                start += resultsPerPage;
+                const pageStep = (resultsPerPage > 10 && organicList.length >= 15) ? resultsPerPage : 10;
+                start += pageStep;
                 pageNumber++;
 
                 if (organicList.length < 5) {
@@ -319,7 +398,7 @@ try {
             failedQueries: stats.failed,
         },
         message: stats.failed > 0 && stats.organicResults === 0
-            ? 'Requests were challenged/blocked by Google Search. Use Apify Proxy group "GOOGLE_SERP" or "RESIDENTIAL" in proxyConfiguration.'
+            ? 'Requests were challenged/blocked by Google Search. Use Apify Proxy group "GOOGLE_SERP", "RESIDENTIAL", or "UNBLOCKER" in proxyConfiguration.'
             : 'Google Search Ultimate Scraper completed successfully.',
     };
 
