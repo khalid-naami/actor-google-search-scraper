@@ -27,6 +27,6 @@
     "apify": "^3.2.6",
     "crawlee": "^3.12.2",
     "got-scraping": "^4.0.7",
-    "playwright": "^1.49.1"
+    "playwright": "1.65.0"
   }
 }
