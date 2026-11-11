@@ -38,7 +38,7 @@ try {
     const acceptLanguage = `${cleanLanguage}-${cleanCountry.toUpperCase()},${cleanLanguage};q=0.9,en;q=0.8`;
 
     const isGoogleSerpProxy = Array.isArray(proxyConfiguration?.apifyProxyGroups)
-        && proxyConfiguration.apifyProxyGroups.includes('GOOGLE_SERP');
+        && proxyConfiguration.apifyProxyGroups.some((g) => /GOOGLE_?SERP/i.test(String(g)));
 
     const safeQueries = Array.isArray(queries) ? queries : [queries];
 
@@ -59,8 +59,12 @@ try {
 
     async function fetchHtml(url) {
         const proxyUrl = proxyConfig ? await proxyConfig.newUrl() : undefined;
+        const proxyIsSerp = isGoogleSerpProxy || /GOOGLE_?SERP/i.test(proxyUrl || '');
+        // Apify GOOGLE_SERP proxy strictly requires plain http://www.google.com/search?...
+        const requestUrl = proxyIsSerp ? url.replace(/^https:\/\//i, 'http://') : url;
+
         const response = await gotScraping({
-            url,
+            url: requestUrl,
             headers: {
                 'accept-language': acceptLanguage,
             },
@@ -70,15 +74,18 @@ try {
             },
             sessionToken: {},
             proxyUrl,
+            http2: !proxyIsSerp,
+            followRedirect: !proxyIsSerp,
             timeout: { request: 30000 },
             retry: { limit: 1 },
             throwHttpErrors: false,
         });
 
-        const blockCheck = detectGoogleBlock(response.body, response.url, response.statusCode);
+        const blockCheck = detectGoogleBlock(response.body, response.url || requestUrl, response.statusCode);
         if (blockCheck.blocked) {
             const err = new Error(blockCheck.message);
             err.reason = blockCheck.reason;
+            err.isSerpProxy = proxyIsSerp;
             throw err;
         }
 
@@ -207,6 +214,7 @@ try {
                     try {
                         html = await fetchHtml(searchUrl);
                     } catch (httpErr) {
+                        if (httpErr.isSerpProxy) throw httpErr;
                         log.warning(`⚠️ Fast HTTP blocked/challenged (${httpErr.message}). Trying Playwright browser fallback...`);
                         const pwProxyUrl = proxyConfig ? await proxyConfig.newUrl() : undefined;
                         html = await fetchWithPlaywright(searchUrl, pwProxyUrl);
@@ -228,7 +236,13 @@ try {
                 // 2. Organic Results
                 const organicList = parseOrganicResults(html, query, collectedForQuery + 1, pageNumber);
                 if (!organicList || organicList.length === 0) {
-                    log.info(`ℹ️ No more organic results found for "${query}" at start=${start}.`);
+                    const pageTitle = html.match(/<title>([^<]*)<\/title>/i)?.[1] || '';
+                    const h3Count = (html.match(/<h3[\s>]/gi) || []).length;
+                    log.info(`ℹ️ No more organic results found for "${query}" at start=${start}.`, {
+                        htmlLength: html.length,
+                        pageTitle,
+                        h3Count,
+                    });
                     hasMore = false;
                     break;
                 }
