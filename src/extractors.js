@@ -73,20 +73,23 @@ export function parsePlaywrightProxy(proxyUrl) {
 /**
  * Detect Google HTTP blocks, SearchGuard JS challenge, EU consent redirect, or /sorry/ CAPTCHA
  */
-export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200) {
-    if (statusCode === 429 || statusCode === 403 || statusCode >= 500) {
-        return {
-            blocked: true,
-            reason: 'HTTP_ERROR',
-            message: `Google returned HTTP ${statusCode}`,
-        };
-    }
-
-    const urlLower = String(finalUrl || '').toLowerCase();
+export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, headers = {}) {
     const htmlStr = String(html || '');
+    const urlLower = String(finalUrl || '').toLowerCase();
+    const location = String(headers?.location || headers?.Location || '').trim();
+    const locationLower = location.toLowerCase();
+    const title = htmlStr.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim() || '';
+    const diagnostics = {
+        statusCode,
+        finalUrl: String(finalUrl || ''),
+        ...(location ? { location } : {}),
+        htmlLength: htmlStr.length,
+        ...(title ? { title } : {}),
+    };
 
     if (
         urlLower.includes('/sorry/')
+        || locationLower.includes('/sorry/')
         || htmlStr.includes('/sorry/index')
         || htmlStr.includes('id="captcha-form"')
         || /unusual traffic from your computer/i.test(htmlStr)
@@ -95,28 +98,52 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200) {
             blocked: true,
             reason: 'CAPTCHA',
             message: 'Google gated this IP with a /sorry/ CAPTCHA ("unusual traffic")',
+            diagnostics,
         };
     }
 
     if (
         urlLower.includes('consent.google.')
+        || locationLower.includes('consent.google.')
         || htmlStr.includes('action="https://consent.google.')
     ) {
         return {
             blocked: true,
             reason: 'CONSENT',
             message: 'Google redirected to a consent gate',
+            diagnostics,
         };
     }
 
     if (
-        htmlStr.includes('/httpservice/retry/enablejs')
+        urlLower.includes('/httpservice/retry/enablejs')
+        || locationLower.includes('/httpservice/retry/enablejs')
+        || htmlStr.includes('/httpservice/retry/enablejs')
         || htmlStr.includes('Please click here if you are not redirected')
     ) {
         return {
             blocked: true,
             reason: 'JS_CHALLENGE',
             message: 'Google SearchGuard returned /httpservice/retry/enablejs challenge (JavaScript required)',
+            diagnostics,
+        };
+    }
+
+    if (statusCode === 429 || statusCode === 403 || statusCode >= 500) {
+        return {
+            blocked: true,
+            reason: 'HTTP_ERROR',
+            message: `Google returned HTTP ${statusCode}`,
+            diagnostics,
+        };
+    }
+
+    if (statusCode >= 300 && statusCode < 400 && location) {
+        return {
+            blocked: true,
+            reason: 'REDIRECT',
+            message: `Google returned HTTP ${statusCode} redirect to ${location}`,
+            diagnostics,
         };
     }
 
@@ -125,10 +152,11 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200) {
             blocked: true,
             reason: 'EMPTY_RESPONSE',
             message: `Unexpectedly short Google response (${htmlStr.length} bytes)`,
+            diagnostics,
         };
     }
 
-    return { blocked: false };
+    return { blocked: false, diagnostics };
 }
 
 // Helper to clean HTML entities and tags
