@@ -72,6 +72,7 @@ export function parsePlaywrightProxy(proxyUrl) {
 
 /**
  * Detect Google HTTP blocks, SearchGuard JS challenge, EU consent redirect, or /sorry/ CAPTCHA
+ * Carefully avoids false positives from inline <script> JS strings bundled inside real 200 OK SERP pages.
  */
 export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, headers = {}) {
     const htmlStr = String(html || '');
@@ -87,13 +88,8 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, he
         ...(title ? { title } : {}),
     };
 
-    if (
-        urlLower.includes('/sorry/')
-        || locationLower.includes('/sorry/')
-        || htmlStr.includes('/sorry/index')
-        || htmlStr.includes('id="captcha-form"')
-        || /unusual traffic from your computer/i.test(htmlStr)
-    ) {
+    // 1. Definitive URL / Location signals
+    if (urlLower.includes('/sorry/') || locationLower.includes('/sorry/')) {
         return {
             blocked: true,
             reason: 'CAPTCHA',
@@ -102,11 +98,7 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, he
         };
     }
 
-    if (
-        urlLower.includes('consent.google.')
-        || locationLower.includes('consent.google.')
-        || htmlStr.includes('action="https://consent.google.')
-    ) {
+    if (urlLower.includes('consent.google.') || locationLower.includes('consent.google.')) {
         return {
             blocked: true,
             reason: 'CONSENT',
@@ -115,12 +107,7 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, he
         };
     }
 
-    if (
-        urlLower.includes('/httpservice/retry/enablejs')
-        || locationLower.includes('/httpservice/retry/enablejs')
-        || htmlStr.includes('/httpservice/retry/enablejs')
-        || htmlStr.includes('Please click here if you are not redirected')
-    ) {
+    if (urlLower.includes('/httpservice/retry/enablejs') || locationLower.includes('/httpservice/retry/enablejs')) {
         return {
             blocked: true,
             reason: 'JS_CHALLENGE',
@@ -129,11 +116,15 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, he
         };
     }
 
+    // 2. HTTP redirects & error statuses
     if (statusCode === 429 || statusCode === 403 || statusCode >= 500) {
+        const isCaptchaStatus = htmlStr.includes('id="captcha-form"') || /unusual traffic from your computer/i.test(htmlStr);
         return {
             blocked: true,
-            reason: 'HTTP_ERROR',
-            message: `Google returned HTTP ${statusCode}`,
+            reason: isCaptchaStatus ? 'CAPTCHA' : 'HTTP_ERROR',
+            message: isCaptchaStatus
+                ? `Google gated this IP with HTTP ${statusCode} /sorry/ CAPTCHA`
+                : `Google returned HTTP ${statusCode}`,
             diagnostics,
         };
     }
@@ -147,7 +138,47 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200, he
         };
     }
 
-    if (htmlStr.length < 1500 && !htmlStr.includes('id="search"') && !htmlStr.includes('id="rso"') && !htmlStr.includes('id="main"')) {
+    // 3. DOM + visible text checks (strip <script>/<style> so inline SearchGuard JS in real SERPs never false-triggers)
+    const $ = load(htmlStr);
+    const hasSerpResults = $('#rso h3, #search h3, #main h3, div.Gx5Zad h3, div.Gx5Zad a[href^="/url?"]').length > 0;
+    const hasCaptchaForm = $('form#captcha-form, #captcha-form').length > 0;
+    const noscriptHtml = $('noscript').map((_, el) => $(el).html() || '').get().join(' ');
+
+    $('script, style, noscript').remove();
+    const visibleText = $('body').text().replace(/\s+/g, ' ').trim();
+
+    if (hasCaptchaForm || (!hasSerpResults && /unusual traffic from your computer/i.test(visibleText))) {
+        return {
+            blocked: true,
+            reason: 'CAPTCHA',
+            message: 'Google gated this IP with a /sorry/ CAPTCHA ("unusual traffic")',
+            diagnostics,
+        };
+    }
+
+    if (!hasSerpResults && $('form[action*="consent.google."]').length > 0) {
+        return {
+            blocked: true,
+            reason: 'CONSENT',
+            message: 'Google redirected to a consent gate',
+            diagnostics,
+        };
+    }
+
+    const hasEnableJsGate = $('meta[http-equiv="refresh"][content*="enablejs"], a[href*="/httpservice/retry/enablejs"]').length > 0
+        || noscriptHtml.includes('/httpservice/retry/enablejs')
+        || /please click here if you are not redirected/i.test(visibleText);
+
+    if (!hasSerpResults && hasEnableJsGate) {
+        return {
+            blocked: true,
+            reason: 'JS_CHALLENGE',
+            message: 'Google SearchGuard returned /httpservice/retry/enablejs challenge (JavaScript required)',
+            diagnostics,
+        };
+    }
+
+    if (htmlStr.length < 1500 && !$('#search, #rso, #main').length) {
         return {
             blocked: true,
             reason: 'EMPTY_RESPONSE',
@@ -179,8 +210,8 @@ export function cleanGoogleUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') return null;
     let url = rawUrl.trim();
 
-    // Handle relative Google redirect URLs: /url?q=https://example.com&... or https://www.google.com/url?q=...
-    if (url.startsWith('/url?') || url.startsWith('https://www.google.com/url?')) {
+    // Handle relative or regional Google redirect URLs: /url?q=https://example.com&... or http(s)://www.google.*/url?q=...
+    if (url.startsWith('/url?') || /^https?:\/\/(?:www\.)?google\.[^/]+\/url\?/i.test(url)) {
         try {
             const parsed = new URL(url, 'https://www.google.com');
             const target = parsed.searchParams.get('q') || parsed.searchParams.get('url');
