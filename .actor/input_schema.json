@@ -114,7 +114,7 @@
     "proxyConfiguration": {
       "title": "Proxy Configuration",
       "type": "object",
-      "description": "Apify Proxy (RESIDENTIAL recommended for Google Search to prevent CAPTCHAs).",
+      "description": "Apify Proxy (select GOOGLE_SERP or RESIDENTIAL group for reliable Google Search extraction without CAPTCHAs or SearchGuard blocks).",
       "editor": "proxy",
       "default": {
         "useApifyProxy": true
