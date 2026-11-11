@@ -114,10 +114,19 @@
     "proxyConfiguration": {
       "title": "Proxy Configuration",
       "type": "object",
-      "description": "Apify Proxy (select GOOGLE_SERP or RESIDENTIAL group for reliable Google Search extraction without CAPTCHAs or SearchGuard blocks).",
+      "description": "Apify Proxy (GOOGLE_SERP recommended for unblocked Google Search HTML; RESIDENTIAL also supported).",
       "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": [
+          "GOOGLE_SERP"
+        ]
+      },
       "default": {
-        "useApifyProxy": true
+        "useApifyProxy": true,
+        "apifyProxyGroups": [
+          "GOOGLE_SERP"
+        ]
       }
     }
   },
