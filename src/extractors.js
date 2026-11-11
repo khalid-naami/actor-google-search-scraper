@@ -1,9 +1,137 @@
+import { load } from 'cheerio';
+
 /**
  * Google Search Ultimate Scraper - Extractors & Parsers
- * High-precision parsing for Organic SERP Results, Featured Snippets, PAA, and Related Searches.
+ * Cheerio DOM extraction for Organic SERP Results, Featured Snippets, PAA, and Related Searches.
  */
 
-// Helper to clean HTML entities
+const DEFAULT_REGION_BY_LANG = {
+    en: 'US',
+    ar: 'SA',
+    fr: 'FR',
+    de: 'DE',
+    es: 'ES',
+    it: 'IT',
+    nl: 'NL',
+    pt: 'BR',
+    ja: 'JP',
+    hi: 'IN',
+    tr: 'TR',
+    zh: 'CN',
+    ko: 'KR',
+    ru: 'RU',
+};
+
+/**
+ * Clean user input strings (strip whitespace and accidental surrounding quotes)
+ */
+export function cleanCode(raw, fallback = '') {
+    if (!raw || typeof raw !== 'string') return fallback;
+    const cleaned = raw.trim().replace(/^['"`]+|['"`]+$/g, '').trim();
+    return cleaned || fallback;
+}
+
+/**
+ * Build valid BCP-47 Chromium locale (e.g. "en-US") from hl/gl
+ */
+export function normalizeLocale(languageCode = 'en', countryCode = 'us') {
+    const rawLang = cleanCode(languageCode, 'en').replace('_', '-');
+    const rawCountry = cleanCode(countryCode, 'us').toUpperCase();
+
+    if (/^[a-z]{2}-[A-Z]{2}$/.test(rawLang)) {
+        return rawLang;
+    }
+
+    const lang = rawLang.split('-')[0].toLowerCase();
+    if (!/^[a-z]{2}$/.test(lang)) return 'en-US';
+
+    const region = /^[A-Z]{2}$/.test(rawCountry)
+        ? rawCountry
+        : (DEFAULT_REGION_BY_LANG[lang] || 'US');
+
+    return `${lang}-${region}`;
+}
+
+/**
+ * Parse Playwright proxy configuration into { server, username, password }
+ */
+export function parsePlaywrightProxy(proxyUrl) {
+    if (!proxyUrl) return undefined;
+    try {
+        const u = new URL(proxyUrl);
+        const proxy = {
+            server: `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`,
+        };
+        if (u.username) proxy.username = decodeURIComponent(u.username);
+        if (u.password) proxy.password = decodeURIComponent(u.password);
+        return proxy;
+    } catch {
+        return { server: proxyUrl };
+    }
+}
+
+/**
+ * Detect Google HTTP blocks, SearchGuard JS challenge, EU consent redirect, or /sorry/ CAPTCHA
+ */
+export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200) {
+    if (statusCode === 429 || statusCode === 403 || statusCode >= 500) {
+        return {
+            blocked: true,
+            reason: 'HTTP_ERROR',
+            message: `Google returned HTTP ${statusCode}`,
+        };
+    }
+
+    const urlLower = String(finalUrl || '').toLowerCase();
+    const htmlStr = String(html || '');
+
+    if (
+        urlLower.includes('/sorry/')
+        || htmlStr.includes('/sorry/index')
+        || htmlStr.includes('id="captcha-form"')
+        || /unusual traffic from your computer/i.test(htmlStr)
+    ) {
+        return {
+            blocked: true,
+            reason: 'CAPTCHA',
+            message: 'Google gated this IP with a /sorry/ CAPTCHA ("unusual traffic")',
+        };
+    }
+
+    if (
+        urlLower.includes('consent.google.')
+        || htmlStr.includes('action="https://consent.google.')
+    ) {
+        return {
+            blocked: true,
+            reason: 'CONSENT',
+            message: 'Google redirected to a consent gate',
+        };
+    }
+
+    if (
+        htmlStr.includes('/httpservice/retry/enablejs')
+        || htmlStr.includes('Please click here if you are not redirected')
+    ) {
+        return {
+            blocked: true,
+            reason: 'JS_CHALLENGE',
+            message: 'Google SearchGuard returned /httpservice/retry/enablejs challenge (JavaScript required)',
+        };
+    }
+
+    if (htmlStr.length < 1500 && !htmlStr.includes('id="search"') && !htmlStr.includes('id="rso"')) {
+        return {
+            blocked: true,
+            reason: 'EMPTY_RESPONSE',
+            message: `Unexpectedly short Google response (${htmlStr.length} bytes)`,
+        };
+    }
+
+    return { blocked: false };
+}
+
+// Helper to clean HTML entities and tags
 export function decodeHtml(html) {
     if (!html || typeof html !== 'string') return '';
     return html
@@ -14,26 +142,46 @@ export function decodeHtml(html) {
         .replace(/&#39;/g, "'")
         .replace(/&nbsp;/g, ' ')
         .replace(/<[^>]+>/g, '')
+        .replace(/\s+/g, ' ')
         .trim();
 }
 
 // Clean and validate destination URLs
 export function cleanGoogleUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') return null;
-    let url = rawUrl;
+    let url = rawUrl.trim();
 
-    // Handle Google redirect URLs: /url?q=https://example.com&...
-    if (url.startsWith('/url?')) {
-        const match = url.match(/[?&]q=([^&]+)/);
-        if (match) url = decodeURIComponent(match[1]);
+    // Handle relative Google redirect URLs: /url?q=https://example.com&... or https://www.google.com/url?q=...
+    if (url.startsWith('/url?') || url.startsWith('https://www.google.com/url?')) {
+        try {
+            const parsed = new URL(url, 'https://www.google.com');
+            const target = parsed.searchParams.get('q') || parsed.searchParams.get('url');
+            if (target) url = target;
+        } catch {
+            const match = url.match(/[?&](?:q|url)=([^&]+)/);
+            if (match) url = decodeURIComponent(match[1]);
+        }
     }
 
-    if (!url.startsWith('http')) return null;
-    if (url.includes('google.com/search') || url.includes('accounts.google.com') || url.includes('support.google.com')) {
+    if (!/^https?:\/\//i.test(url)) return null;
+
+    try {
+        const parsed = new URL(url);
+        const host = parsed.hostname.toLowerCase();
+        if (
+            host === 'accounts.google.com'
+            || host === 'support.google.com'
+            || host === 'policies.google.com'
+            || host === 'consent.google.com'
+            || (host.endsWith('google.com') && parsed.pathname.startsWith('/search'))
+            || (host.endsWith('google.com') && parsed.pathname.startsWith('/sorry'))
+        ) {
+            return null;
+        }
+        return parsed.toString();
+    } catch {
         return null;
     }
-
-    return url;
 }
 
 // Extract domain from URL
@@ -41,71 +189,94 @@ export function getDomain(url) {
     try {
         const parsed = new URL(url);
         return parsed.hostname.replace(/^www\./, '');
-    } catch (_) {
+    } catch {
         return null;
     }
 }
 
-// Parse Organic Search Results
+function splitDatePrefix(description) {
+    if (!description) return { description: '', date: null };
+    const dateMatch = description.match(
+        /^([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago)\s*[—–\-·|]+\s*/i
+    );
+    if (dateMatch) {
+        return {
+            date: dateMatch[1].trim(),
+            description: description.slice(dateMatch[0].length).trim(),
+        };
+    }
+    return { description: description.trim(), date: null };
+}
+
+// Parse Organic Search Results using Cheerio DOM
 export function parseOrganicResults(html, query, startPosition = 1, pageNumber = 1) {
-    if (!html) return [];
+    if (!html || typeof html !== 'string') return [];
+
+    const $ = load(html);
     const results = [];
+    const seenUrls = new Set();
     let currentPosition = startPosition;
 
-    // Find result blocks: Google wraps them in div.MjjYud, div.g, or div.tF2Cxc
-    const blocks = html.split(/<div[^>]+class="[^"]*(?:MjjYud|g\s|tF2Cxc)[^"]*"[^>]*>/gi);
+    const scope = $('#rso').length ? $('#rso') : ($('#search').length ? $('#search') : ($('#main').length ? $('#main') : $.root()));
 
-    for (let i = 1; i < blocks.length; i++) {
-        const block = blocks[i];
+    const isInsideExcludedSection = (el) => {
+        return el.closest('#tads, #tadsb, #bottomads, .uEierd, [data-text-ad], [data-q], .related-question-pair, [jsname="Cpkphb"], #bres').length > 0;
+    };
 
-        // 1. Title
-        const titleMatch = block.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-        const title = titleMatch ? decodeHtml(titleMatch[1]) : '';
-        if (!title) continue;
+    // 1. Standard Google SERP headings: <a href="..."><h3 ...>...</h3></a> or <h3><a href="...">...</a></h3>
+    scope.find('h3').each((_, h3Node) => {
+        const $h3 = $(h3Node);
+        if (isInsideExcludedSection($h3)) return;
 
-        // 2. Link / URL
-        const linkMatch = block.match(/<a[^>]+href="([^"]+)"[^>]*>/i);
-        const rawUrl = linkMatch ? linkMatch[1] : null;
-        const url = cleanGoogleUrl(rawUrl);
-        if (!url) continue;
-
-        // Avoid duplicate links in the same SERP page
-        if (results.some(r => r.url === url)) continue;
-
-        // 3. Displayed / Breadcrumb URL
-        const citeMatch = block.match(/<cite[^>]*>([\s\S]*?)<\/cite>/i);
-        const displayedUrl = citeMatch ? decodeHtml(citeMatch[1]) : url;
-
-        // 4. Description / Snippet
-        let description = '';
-        const descMatch = block.match(/class="[^"]*VwiC3b[^"]*"[^>]*>([\s\S]*?)<\/div>/i)
-            || block.match(/style="-webkit-line-clamp:[^"]*"[^>]*>([\s\S]*?)<\/div>/i)
-            || block.match(/class="[^"]*IsZvec[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-
-        if (descMatch) {
-            description = decodeHtml(descMatch[1]);
+        let $anchor = $h3.closest('a[href]');
+        if (!$anchor.length) {
+            $anchor = $h3.find('a[href]').first();
         }
-
-        // 5. Date in snippet
-        let date = null;
-        const dateMatch = description.match(/^([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d+\s+(?:days?|hours?|weeks?|months?|years?)\s+ago)\s*[—–-]\s*/i);
-        if (dateMatch) {
-            date = dateMatch[1].trim();
-            description = description.replace(dateMatch[0], '').trim();
+        if (!$anchor.length) {
+            const $parentLink = $h3.parent().closest('div').find('a[href]').first();
+            if ($parentLink.length) $anchor = $parentLink;
         }
+        if (!$anchor.length) return;
 
-        // 6. Sitelinks (if present)
-        const sitelinks = [];
-        const sitelinkRegex = /<a[^>]+class="[^"]*(?:usJjCc|l\s)[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-        let slMatch;
-        while ((slMatch = sitelinkRegex.exec(block)) !== null) {
-            const slUrl = cleanGoogleUrl(slMatch[1]);
-            const slTitle = decodeHtml(slMatch[2]);
-            if (slUrl && slTitle) {
-                sitelinks.push({ title: slTitle, url: slUrl });
+        const url = cleanGoogleUrl($anchor.attr('href'));
+        if (!url || seenUrls.has(url)) return;
+
+        const title = $h3.text().replace(/\s+/g, ' ').trim();
+        if (!title) return;
+
+        const $card = $h3.closest('div.tF2Cxc, div.MjjYud, div.g, div[data-rpos], div.N54PNb, div.kvH3mc, div[data-hveid], div.Gx5Zad');
+
+        // Displayed breadcrumb URL
+        const displayedUrl = $card.find('cite').first().text().replace(/\s+/g, ' ').trim() || url;
+
+        // Description / Snippet (avoid capturing card title/cite text)
+        let rawDescription = '';
+        const snippetSelectors = ['.VwiC3b', '[data-sncf="1"]', '[data-sncf]', '.IsZvec', '.lEBKkf', '.kb0PBd.cvP2Ce', '.BNeawe.s3v9rd'];
+        for (const sel of snippetSelectors) {
+            const candidate = $card.find(sel).filter((__, el) => {
+                const $el = $(el);
+                return $el.find('h3').length === 0 && $el.find('cite').length === 0;
+            }).first().text().replace(/\s+/g, ' ').trim();
+            if (candidate && candidate !== title && candidate.length > 15) {
+                rawDescription = candidate;
+                break;
             }
         }
 
+        const { description, date } = splitDatePrefix(rawDescription);
+
+        // Sitelinks
+        const sitelinks = [];
+        $card.find('a.usJjCc, .HiHjCd a, table.jmjoTe a').each((__, slEl) => {
+            const $sl = $(slEl);
+            const slUrl = cleanGoogleUrl($sl.attr('href'));
+            const slTitle = $sl.text().replace(/\s+/g, ' ').trim();
+            if (slUrl && slTitle && slUrl !== url && !sitelinks.some((s) => s.url === slUrl)) {
+                sitelinks.push({ title: slTitle, url: slUrl });
+            }
+        });
+
+        seenUrls.add(url);
         results.push({
             type: 'ORGANIC',
             searchQuery: query,
@@ -116,9 +287,45 @@ export function parseOrganicResults(html, query, startPosition = 1, pageNumber =
             displayedUrl,
             description,
             date,
-            sitelinks: sitelinks.length > 0 ? sitelinks : undefined,
+            ...(sitelinks.length > 0 ? { sitelinks } : {}),
             pageNumber,
-            scrapedAt: new Date().toISOString()
+            scrapedAt: new Date().toISOString(),
+        });
+    });
+
+    // 2. Fallback for light / mobile SERP HTML (e.g., BNeawe vvjwJb cards) if no <h3> links found
+    if (results.length === 0) {
+        scope.find('div.Gx5Zad, div.ZINbbc').each((_, cardNode) => {
+            const $card = $(cardNode);
+            if (isInsideExcludedSection($card)) return;
+
+            const $anchor = $card.find('a[href^="/url?"], a[href^="http"]').first();
+            if (!$anchor.length) return;
+
+            const url = cleanGoogleUrl($anchor.attr('href'));
+            if (!url || seenUrls.has(url)) return;
+
+            const title = $anchor.find('.vvjwJb, .BNeawe.vvjwJb').first().text().replace(/\s+/g, ' ').trim()
+                || $anchor.text().replace(/\s+/g, ' ').trim();
+            if (!title) return;
+
+            const rawDescription = $card.find('.BNeawe.s3v9rd').not(':has(a)').first().text().replace(/\s+/g, ' ').trim();
+            const { description, date } = splitDatePrefix(rawDescription);
+
+            seenUrls.add(url);
+            results.push({
+                type: 'ORGANIC',
+                searchQuery: query,
+                position: currentPosition++,
+                title,
+                url,
+                domain: getDomain(url),
+                displayedUrl: url,
+                description,
+                date,
+                pageNumber,
+                scrapedAt: new Date().toISOString(),
+            });
         });
     }
 
@@ -127,39 +334,37 @@ export function parseOrganicResults(html, query, startPosition = 1, pageNumber =
 
 // Parse "People Also Ask" (PAA) Questions
 export function parsePeopleAlsoAsk(html, query) {
-    if (!html) return [];
+    if (!html || typeof html !== 'string') return [];
+    const $ = load(html);
     const questions = [];
+    const seen = new Set();
 
-    // 1. Data-q attribute matches
-    const dataQRegex = /data-q="([^"]+)"/gi;
-    let match;
-    while ((match = dataQRegex.exec(html)) !== null) {
-        const q = decodeHtml(match[1]);
-        if (q && q.length > 5 && !questions.some(item => item.question === q)) {
+    $('[data-q]').each((_, el) => {
+        const q = ($(el).attr('data-q') || '').replace(/\s+/g, ' ').trim();
+        if (q && q.length > 5 && !seen.has(q.toLowerCase())) {
+            seen.add(q.toLowerCase());
             questions.push({
                 type: 'PEOPLE_ALSO_ASK',
                 searchQuery: query,
                 question: q,
-                scrapedAt: new Date().toISOString()
+                scrapedAt: new Date().toISOString(),
             });
         }
-    }
+    });
 
-    // 2. Fallback class match
     if (questions.length === 0) {
-        const classRegex = /class="[^"]*(?:related-question-pair|match-mod-horizontal)[^"]*"[^>]*>[\s\S]*?<div[^>]*>([^<]+)<\/div>/gi;
-        let cMatch;
-        while ((cMatch = classRegex.exec(html)) !== null) {
-            const q = decodeHtml(cMatch[1]);
-            if (q && q.endsWith('?') && !questions.some(item => item.question === q)) {
+        $('.related-question-pair, [jsname="yEVEwb"]').each((_, el) => {
+            const q = $(el).find('span, div[role="button"]').first().text().replace(/\s+/g, ' ').trim();
+            if (q && q.endsWith('?') && !seen.has(q.toLowerCase())) {
+                seen.add(q.toLowerCase());
                 questions.push({
                     type: 'PEOPLE_ALSO_ASK',
                     searchQuery: query,
                     question: q,
-                    scrapedAt: new Date().toISOString()
+                    scrapedAt: new Date().toISOString(),
                 });
             }
-        }
+        });
     }
 
     return questions;
@@ -167,61 +372,88 @@ export function parsePeopleAlsoAsk(html, query) {
 
 // Parse Featured Snippet (Answer Box)
 export function parseFeaturedSnippet(html, query) {
-    if (!html) return null;
+    if (!html || typeof html !== 'string') return null;
+    const $ = load(html);
+    const scope = $('#rso').length ? $('#rso') : ($('#search').length ? $('#search') : $.root());
 
-    const answerMatch = html.match(/class="[^"]*(?:hgKElc|ILfuVd)[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div)>/i);
-    if (!answerMatch) return null;
+    const snippetEl = scope.find('.hgKElc, .ILfuVd, .IZ6rdc, .wDYxhc[data-md="61"] .LGOjhe')
+        .filter((_, el) => $(el).closest('[data-q], .related-question-pair').length === 0)
+        .first();
 
-    const answer = decodeHtml(answerMatch[1]);
+    if (!snippetEl.length) return null;
+
+    const answer = snippetEl.text().replace(/\s+/g, ' ').trim();
     if (!answer) return null;
 
-    // Find source URL and title inside featured snippet block
-    const blockMatch = html.match(/class="[^"]*(?:cUnQKe|xpdopen)[^"]*"[\s\S]*?<\/div>\s*<\/div>/i);
-    let title = '';
-    let url = null;
-
-    if (blockMatch) {
-        const tMatch = blockMatch[0].match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-        if (tMatch) title = decodeHtml(tMatch[1]);
-
-        const lMatch = blockMatch[0].match(/<a[^>]+href="([^"]+)"[^>]*>/i);
-        if (lMatch) url = cleanGoogleUrl(lMatch[1]);
-    }
+    const $container = snippetEl.closest('.xpdopen, .cUnQKe, .MjjYud, .kp-blk, [data-attrid]');
+    const title = $container.find('h3').first().text().replace(/\s+/g, ' ').trim();
+    const rawHref = $container.find('a[href]').filter((_, a) => Boolean(cleanGoogleUrl($(a).attr('href')))).first().attr('href');
+    const url = cleanGoogleUrl(rawHref);
 
     return {
         type: 'FEATURED_SNIPPET',
         searchQuery: query,
         answer,
-        title: title || undefined,
-        url: url || undefined,
-        domain: url ? getDomain(url) : undefined,
-        scrapedAt: new Date().toISOString()
+        ...(title ? { title } : {}),
+        ...(url ? { url, domain: getDomain(url) } : {}),
+        scrapedAt: new Date().toISOString(),
     };
 }
 
-// Parse Related Searches Keywords
+// Parse Related Searches Keywords (scoped to bottom SERP suggestion containers)
 export function parseRelatedSearches(html, query) {
-    if (!html) return [];
+    if (!html || typeof html !== 'string') return [];
+    const $ = load(html);
     const related = [];
+    const seen = new Set();
+    const normalizedQuery = String(query || '').trim().toLowerCase();
 
-    // Match links with /search?q= in the bottom section
-    const regex = /<a[^>]+href="\/search\?[^"]*q=([^"&]+)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-    let match;
+    const selectors = [
+        '#bres a[href*="/search?"]',
+        '#botstuff a[href*="/search?"]',
+        'a.k8XOCe[href*="/search?"]',
+        '.AJLUJb a[href*="/search?"]',
+        'a.F3dFMc[href*="/search?"]',
+        '.BNeawe a[href*="/search?"]',
+    ].join(', ');
 
-    while ((match = regex.exec(html)) !== null) {
-        const keyword = decodeURIComponent(match[1].replace(/\+/g, ' ')).trim();
-        const text = decodeHtml(match[2]);
+    $(selectors).each((_, el) => {
+        const $a = $(el);
+        if ($a.closest('#hdtb, #top_nav, [role="navigation"]').length > 0) return;
 
-        const term = text || keyword;
-        if (term && term.toLowerCase() !== query.toLowerCase() && !related.some(r => r.title.toLowerCase() === term.toLowerCase())) {
+        const href = $a.attr('href') || '';
+        if (/[?&](?:tbm|udm|start|tbs)=/i.test(href)) return;
+
+        let term = $a.find('.s75CSd, .AB4Wff').first().text().replace(/\s+/g, ' ').trim()
+            || $a.text().replace(/\s+/g, ' ').trim();
+
+        if (!term) {
+            const match = href.match(/[?&]q=([^&]+)/);
+            if (match) {
+                try {
+                    term = decodeURIComponent(match[1].replace(/\+/g, ' ')).trim();
+                } catch {}
+            }
+        }
+
+        const lower = term.toLowerCase();
+        if (
+            term
+            && term.length > 1
+            && lower !== normalizedQuery
+            && !/^\d+$/.test(term)
+            && !['next', 'previous', 'more'].includes(lower)
+            && !seen.has(lower)
+        ) {
+            seen.add(lower);
             related.push({
                 type: 'RELATED_SEARCH',
                 searchQuery: query,
                 title: term,
-                scrapedAt: new Date().toISOString()
+                scrapedAt: new Date().toISOString(),
             });
         }
-    }
+    });
 
     return related;
 }
