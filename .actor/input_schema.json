@@ -1,135 +1,125 @@
 {
-    "title": "Google Search Ultimate Scraper Input Schema",
-    "type": "object",
-    "schemaVersion": 1,
-    "properties": {
-        "queries": {
-            "title": "Search Queries / Keywords",
-            "type": "array",
-            "description": "Keywords or search phrases to query on Google (supports search operators like site:, intitle:, filetype:).",
-            "editor": "stringList",
-            "prefill": [
-                "artificial intelligence agents",
-                "best travel backpacks"
-            ]
-        },
-        "countryCode": {
-            "title": "Country Code (gl)",
-            "type": "string",
-            "description": "Two-letter country code for geo-targeted search results (e.g. 'us', 'gb', 'fr', 'de', 'ae', 'sa', 'ca', 'au').",
-            "default": "us",
-            "editor": "select",
-            "enum": [
-                "us",
-                "gb",
-                "ca",
-                "au",
-                "fr",
-                "de",
-                "ae",
-                "sa",
-                "es",
-                "it",
-                "nl",
-                "br",
-                "in",
-                "jp"
-            ],
-            "enumTitles": [
-                "United States (US)",
-                "United Kingdom (UK)",
-                "Canada (CA)",
-                "Australia (AU)",
-                "France (FR)",
-                "Germany (DE)",
-                "United Arab Emirates (AE)",
-                "Saudi Arabia (SA)",
-                "Spain (ES)",
-                "Italy (IT)",
-                "Netherlands (NL)",
-                "Brazil (BR)",
-                "India (IN)",
-                "Japan (JP)"
-            ]
-        },
-        "languageCode": {
-            "title": "Language Code (hl)",
-            "type": "string",
-            "description": "Two-letter language code for search results (e.g. 'en', 'ar', 'fr', 'de', 'es').",
-            "default": "en",
-            "editor": "textfield"
-        },
-        "maxResults": {
-            "title": "Maximum Results Per Query",
-            "type": "integer",
-            "description": "Maximum number of organic search results to extract per keyword.",
-            "default": 50,
-            "minimum": 1,
-            "maximum": 500
-        },
-        "resultsPerPage": {
-            "title": "Results Per Page (num)",
-            "type": "integer",
-            "description": "Number of results requested per page from Google (10, 20, 50, or 100).",
-            "default": 50,
-            "editor": "select",
-            "enum": [
-                10,
-                20,
-                50,
-                100
-            ],
-            "enumTitles": [
-                "10 results per page",
-                "20 results per page",
-                "50 results per page (Recommended)",
-                "100 results per page"
-            ]
-        },
-        "extractPaa": {
-            "title": "Extract People Also Ask (PAA)",
-            "type": "boolean",
-            "description": "If enabled, extracts questions and answers from Google's 'People Also Ask' interactive box.",
-            "default": true
-        },
-        "extractRelated": {
-            "title": "Extract Related Searches",
-            "type": "boolean",
-            "description": "If enabled, extracts related search query suggestions at the bottom of the SERP.",
-            "default": true
-        },
-        "timeFilter": {
-            "title": "Time Filter",
-            "type": "string",
-            "description": "Filter results by publication date/freshness.",
-            "default": "all",
-            "editor": "select",
-            "enum": [
-                "all",
-                "qdr:h",
-                "qdr:d",
-                "qdr:w",
-                "qdr:m",
-                "qdr:y"
-            ],
-            "enumTitles": [
-                "Any Time",
-                "Past Hour",
-                "Past 24 Hours",
-                "Past Week",
-                "Past Month",
-                "Past Year"
-            ]
-        },
-        "proxyConfiguration": {
-            "title": "Proxy Configuration",
-            "type": "object",
-            "description": "Apify Proxy (RESIDENTIAL recommended for Google Search to prevent CAPTCHAs).",
-            "editor": "proxy",
-            "default": {
-                "useApifyProxy": true
-            }
-        }
+  "title": "Google Search Ultimate Scraper Input Schema",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "queries": {
+      "title": "Search Queries / Keywords",
+      "type": "array",
+      "description": "Keywords or search phrases to query on Google (supports search operators like site:, intitle:, filetype:).",
+      "editor": "stringList",
+      "prefill": [
+        "artificial intelligence agents",
+        "best travel backpacks"
+      ]
     },
-    "required": []
+    "countryCode": {
+      "title": "Country Code (gl)",
+      "type": "string",
+      "description": "Two-letter country code for geo-targeted search results (e.g. 'us', 'gb', 'fr', 'de', 'ae', 'sa', 'ca', 'au').",
+      "default": "us",
+      "editor": "select",
+      "enum": [
+        "us",
+        "gb",
+        "ca",
+        "au",
+        "fr",
+        "de",
+        "ae",
+        "sa",
+        "es",
+        "it",
+        "nl",
+        "br",
+        "in",
+        "jp"
+      ],
+      "enumTitles": [
+        "United States (US)",
+        "United Kingdom (UK)",
+        "Canada (CA)",
+        "Australia (AU)",
+        "France (FR)",
+        "Germany (DE)",
+        "United Arab Emirates (AE)",
+        "Saudi Arabia (SA)",
+        "Spain (ES)",
+        "Italy (IT)",
+        "Netherlands (NL)",
+        "Brazil (BR)",
+        "India (IN)",
+        "Japan (JP)"
+      ]
+    },
+    "languageCode": {
+      "title": "Language Code (hl)",
+      "type": "string",
+      "description": "Two-letter language code for search results (e.g. 'en', 'ar', 'fr', 'de', 'es').",
+      "default": "en",
+      "editor": "textfield"
+    },
+    "maxResults": {
+      "title": "Maximum Results Per Query",
+      "type": "integer",
+      "description": "Maximum number of organic search results to extract per keyword.",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "resultsPerPage": {
+      "title": "Results Per Page (num)",
+      "type": "integer",
+      "description": "Number of results requested per page from Google (10 to 100).",
+      "default": 50,
+      "minimum": 10,
+      "maximum": 100,
+      "editor": "number"
+    },
+    "extractPaa": {
+      "title": "Extract People Also Ask (PAA)",
+      "type": "boolean",
+      "description": "If enabled, extracts questions and answers from Google's 'People Also Ask' interactive box.",
+      "default": true
+    },
+    "extractRelated": {
+      "title": "Extract Related Searches",
+      "type": "boolean",
+      "description": "If enabled, extracts related search query suggestions at the bottom of the SERP.",
+      "default": true
+    },
+    "timeFilter": {
+      "title": "Time Filter",
+      "type": "string",
+      "description": "Filter results by publication date/freshness.",
+      "default": "all",
+      "editor": "select",
+      "enum": [
+        "all",
+        "qdr:h",
+        "qdr:d",
+        "qdr:w",
+        "qdr:m",
+        "qdr:y"
+      ],
+      "enumTitles": [
+        "Any Time",
+        "Past Hour",
+        "Past 24 Hours",
+        "Past Week",
+        "Past Month",
+        "Past Year"
+      ]
+    },
+    "proxyConfiguration": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Apify Proxy (RESIDENTIAL recommended for Google Search to prevent CAPTCHAs).",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true
+      }
+    }
+  },
+  "required": []
 }
