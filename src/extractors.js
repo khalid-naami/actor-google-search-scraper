@@ -120,7 +120,7 @@ export function detectGoogleBlock(html = '', finalUrl = '', statusCode = 200) {
         };
     }
 
-    if (htmlStr.length < 1500 && !htmlStr.includes('id="search"') && !htmlStr.includes('id="rso"')) {
+    if (htmlStr.length < 1500 && !htmlStr.includes('id="search"') && !htmlStr.includes('id="rso"') && !htmlStr.includes('id="main"')) {
         return {
             blocked: true,
             reason: 'EMPTY_RESPONSE',
@@ -247,7 +247,7 @@ export function parseOrganicResults(html, query, startPosition = 1, pageNumber =
         const $card = $h3.closest('div.tF2Cxc, div.MjjYud, div.g, div[data-rpos], div.N54PNb, div.kvH3mc, div[data-hveid], div.Gx5Zad');
 
         // Displayed breadcrumb URL
-        const displayedUrl = $card.find('cite').first().text().replace(/\s+/g, ' ').trim() || url;
+        const displayedUrl = $card.find('cite, .UPmit').first().text().replace(/\s+/g, ' ').trim() || url;
 
         // Description / Snippet (avoid capturing card title/cite text)
         let rawDescription = '';
