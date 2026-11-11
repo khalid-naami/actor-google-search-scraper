@@ -70,8 +70,8 @@
     "resultsPerPage": {
       "title": "Results Per Page (num)",
       "type": "integer",
-      "description": "Number of results requested per page from Google (10 to 100).",
-      "default": 50,
+      "description": "Number of results requested per page from Google (10 recommended; Google ignores larger num values on many regions).",
+      "default": 10,
       "minimum": 10,
       "maximum": 100,
       "editor": "number"
@@ -114,7 +114,7 @@
     "proxyConfiguration": {
       "title": "Proxy Configuration",
       "type": "object",
-      "description": "Apify Proxy (GOOGLE_SERP recommended for unblocked Google Search HTML; RESIDENTIAL also supported).",
+      "description": "Apify Proxy configuration. Select GOOGLE_SERP, UNBLOCKER, or RESIDENTIAL (default Datacenter IPs are commonly challenged by Google Search).",
       "editor": "proxy",
       "prefill": {
         "useApifyProxy": true,
