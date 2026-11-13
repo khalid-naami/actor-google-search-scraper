@@ -13,6 +13,34 @@ import {
     parseRelatedSearches,
 } from './extractors.js';
 
+function sanitizeRecord(value) {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : undefined;
+    }
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => sanitizeRecord(item))
+            .filter((item) => item !== null && item !== undefined);
+    }
+    if (typeof value === 'object' && !(value instanceof Date)) {
+        const clean = {};
+        for (const [k, v] of Object.entries(value)) {
+            const next = sanitizeRecord(v);
+            if (next !== null && next !== undefined) {
+                clean[k] = next;
+            }
+        }
+        return clean;
+    }
+    return value;
+}
+
+function isProxyTransportError(errOrStatus) {
+    const msg = String(errOrStatus?.message || errOrStatus || '');
+    return errOrStatus === 597 || errOrStatus === 407 || /597|UPSTREAM407|407|Proxy responded with|tunneling socket|ECONNREFUSED/i.test(msg);
+}
+
 await Actor.init();
 
 let hasFailed = false;
@@ -24,7 +52,7 @@ try {
         countryCode = 'us',
         languageCode = 'en',
         maxResults = 50,
-        resultsPerPage = 50,
+        resultsPerPage = 10,
         extractPaa = true,
         extractRelated = true,
         timeFilter = 'all',
@@ -52,7 +80,14 @@ try {
         isGoogleSerpProxy,
     });
 
-    const proxyConfig = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
+    let proxyConfig;
+    if (proxyConfiguration) {
+        try {
+            proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration);
+        } catch (proxyErr) {
+            log.warning(`⚠️ Proxy initialization skipped (${proxyErr.message}); falling back to direct connection.`);
+        }
+    }
     const resolvedSerpProxy = isGoogleSerpProxy
         || (Array.isArray(proxyConfig?.groups) && proxyConfig.groups.some((g) => /GOOGLE_?SERP/i.test(String(g))));
 
@@ -305,7 +340,7 @@ try {
                     if (snippet) {
                         snippet.countryCode = cleanCountry;
                         snippet.languageCode = cleanLanguage;
-                        await Actor.pushData(snippet);
+                        await Actor.pushData(sanitizeRecord(snippet));
                         stats.featuredSnippets++;
                         log.info(`⭐ Extracted Featured Snippet for query: "${query}"`);
                     }
@@ -332,7 +367,7 @@ try {
                     }
                     item.countryCode = cleanCountry;
                     item.languageCode = cleanLanguage;
-                    await Actor.pushData(item);
+                    await Actor.pushData(sanitizeRecord(item));
                     collectedForQuery++;
                     stats.organicResults++;
                     log.info(`✅ [Pos #${item.position}] ${item.title.slice(0, 50)}... (${item.domain})`);
@@ -344,7 +379,7 @@ try {
                     for (const p of paaList) {
                         p.countryCode = cleanCountry;
                         p.languageCode = cleanLanguage;
-                        await Actor.pushData(p);
+                        await Actor.pushData(sanitizeRecord(p));
                     }
                     stats.paaQuestions += paaList.length;
                     if (paaList.length > 0) {
@@ -358,7 +393,7 @@ try {
                     for (const r of relatedList) {
                         r.countryCode = cleanCountry;
                         r.languageCode = cleanLanguage;
-                        await Actor.pushData(r);
+                        await Actor.pushData(sanitizeRecord(r));
                     }
                     stats.relatedSearches += relatedList.length;
                     if (relatedList.length > 0) {
@@ -385,8 +420,11 @@ try {
         log.info(`🏁 Completed query "${query}". Total organic extracted: ${collectedForQuery}`);
     }
 
+    const totalRecordsExtracted = stats.organicResults + stats.featuredSnippets + stats.paaQuestions + stats.relatedSearches;
     const summary = {
-        status: stats.failed === stats.totalQueries && stats.organicResults === 0 ? 'BLOCKED_BY_CAPTCHA' : 'COMPLETED',
+        status: totalRecordsExtracted === 0
+            ? (stats.failed === stats.totalQueries ? 'BLOCKED_BY_CAPTCHA' : 'FAILED')
+            : 'COMPLETED',
         timestamp: new Date().toISOString(),
         metrics: {
             totalQueries: stats.totalQueries,
@@ -394,16 +432,21 @@ try {
             totalFeaturedSnippets: stats.featuredSnippets,
             totalPaaQuestions: stats.paaQuestions,
             totalRelatedSearches: stats.relatedSearches,
-            totalRecordsExtracted: stats.organicResults + stats.featuredSnippets + stats.paaQuestions + stats.relatedSearches,
+            totalRecordsExtracted,
             failedQueries: stats.failed,
         },
-        message: stats.failed > 0 && stats.organicResults === 0
-            ? 'Requests were challenged/blocked by Google Search. Use Apify Proxy group "GOOGLE_SERP", "RESIDENTIAL", or "UNBLOCKER" in proxyConfiguration.'
+        message: totalRecordsExtracted === 0
+            ? 'Requests were challenged/blocked or returned 0 SERP records. Use Apify Proxy group "GOOGLE_SERP", "RESIDENTIAL", or "UNBLOCKER" in proxyConfiguration.'
             : 'Google Search Ultimate Scraper completed successfully.',
     };
 
     await Actor.setValue('OUTPUT', summary);
     log.info('🏁 Execution Finished. Executive Summary:', summary);
+
+    if (totalRecordsExtracted === 0) {
+        hasFailed = true;
+        await Actor.fail(`Extracted 0 Google Search records. ${summary.message}`);
+    }
 } catch (err) {
     hasFailed = true;
     log.error(`Fatal execution error: ${err.message}`, { stack: err.stack });
