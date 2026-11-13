@@ -4,68 +4,178 @@
         "type": "object",
         "properties": {
             "type": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "SERP Result Type (ORGANIC, PAA, SNIPPET, RELATED)"
             },
             "searchQuery": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Search Keyword / Query"
             },
             "position": {
-                "type": ["integer", "null"],
+                "type": [
+                    "integer",
+                    "null"
+                ],
                 "title": "Organic Rank Position"
             },
             "title": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Page Title"
             },
             "url": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Destination URL"
             },
             "domain": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Domain Hostname"
             },
             "displayedUrl": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Displayed Breadcrumb URL"
             },
             "description": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Snippet Description"
             },
             "question": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "People Also Ask Question"
             },
             "answer": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Answer / Snippet Text"
             },
             "sitelinks": {
-                "type": ["array", "null"],
-                "title": "Sitelinks List"
+                "type": [
+                    "array",
+                    "null"
+                ],
+                "title": "Sitelinks List",
+                "items": {
+                    "type": "object",
+                    "required": [],
+                    "additionalProperties": true
+                }
             },
             "date": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Published Date in Snippet"
             },
             "countryCode": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Search Country (gl)"
             },
             "languageCode": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Search Language (hl)"
             },
             "pageNumber": {
-                "type": ["integer", "null"],
+                "type": [
+                    "integer",
+                    "null"
+                ],
                 "title": "SERP Page Number"
             },
             "scrapedAt": {
-                "type": ["string", "null"],
+                "type": [
+                    "string",
+                    "null"
+                ],
                 "title": "Scraped At Timestamp"
+            }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": true,
+        "required": []
+    },
+    "views": {
+        "overview": {
+            "title": "Overview",
+            "transformation": {
+                "fields": [
+                    "type",
+                    "searchQuery",
+                    "position",
+                    "title",
+                    "url",
+                    "domain",
+                    "displayedUrl",
+                    "description"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "type": {
+                        "label": "SERP Result Type (ORGANIC, PAA, SNIPPET, RELATED)",
+                        "format": "text"
+                    },
+                    "searchQuery": {
+                        "label": "Search Keyword / Query",
+                        "format": "text"
+                    },
+                    "position": {
+                        "label": "Organic Rank Position",
+                        "format": "text"
+                    },
+                    "title": {
+                        "label": "Page Title",
+                        "format": "text"
+                    },
+                    "url": {
+                        "label": "Destination URL",
+                        "format": "link"
+                    },
+                    "domain": {
+                        "label": "Domain Hostname",
+                        "format": "text"
+                    },
+                    "displayedUrl": {
+                        "label": "Displayed Breadcrumb URL",
+                        "format": "link"
+                    },
+                    "description": {
+                        "label": "Snippet Description",
+                        "format": "text"
+                    }
+                }
             }
         }
     }
